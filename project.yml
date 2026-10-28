@@ -1,0 +1,14 @@
+name: VFSwapNavigator
+options:
+  bundleIdPrefix: vn.vfswap
+targets:
+  VFSwapNavigator:
+    type: application
+    platform: iOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: VFSwapNavigator
+      - path: www
+        type: folder
+    info:
+      path: VFSwapNavigator/Info.plist

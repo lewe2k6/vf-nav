@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="VFSwap 3D Nav" />
+  <title>VFSwap 3D Navigator — Tự Xoay 3D & Tự Đổi Hướng (Cron 3s)</title>
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <style>
+    :root {
+      --nav-green: #0d5c46;
+      --nav-green-dark: #094232;
+      --danger: #dc2626;
+      --sheet-bg: #ffffff;
+      --sheet-text: #0f172a;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif; -webkit-tap-highlight-color: transparent; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #090d16; user-select: none; }
+
+    #map { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; }
+
+    /* TOP TURN-BY-TURN BANNER (Giống hệt Google Maps Navigation) */
+    .top-hud {
+      position: absolute;
+      top: max(12px, env(safe-area-inset-top));
+      left: 12px;
+      right: 12px;
+      z-index: 1000;
+      pointer-events: none;
+    }
+    .turn-banner {
+      background: var(--nav-green);
+      color: #ffffff;
+      border-radius: 18px;
+      padding: 15px 18px;
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+      pointer-events: auto;
+      transition: background 0.25s, transform 0.25s;
+    }
+    .turn-banner.rerouting {
+      background: var(--danger);
+      animation: shake 0.45s ease-in-out;
+    }
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      25% { transform: translateX(-6px); }
+      75% { transform: translateX(6px); }
+    }
+    .turn-icon {
+      font-size: 34px;
+      font-weight: 900;
+      width: 48px;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255, 255, 255, 0.14);
+      border-radius: 12px;
+      flex-shrink: 0;
+    }
+    .turn-info { flex: 1; overflow: hidden; }
+    .turn-dist {
+      font-size: 13px;
+      font-weight: 700;
+      color: #a7f3d0;
+      margin-bottom: 2px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .turn-street {
+      font-size: 20px;
+      font-weight: 800;
+      line-height: 1.22;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .next-turn-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--nav-green-dark);
+      color: #e2e8f0;
+      padding: 7px 14px;
+      border-radius: 0 0 14px 14px;
+      margin-left: 18px;
+      font-size: 13px;
+      font-weight: 700;
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+      pointer-events: auto;
+    }
+
+    .cron-pill {
+      background: rgba(0, 0, 0, 0.45);
+      padding: 3px 9px;
+      border-radius: 999px;
+      font-size: 11px;
+      color: #6ee7b7;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      box-shadow: 0 0 8px #10b981;
+      transition: transform 0.2s;
+    }
+    .pulse-dot.ping { transform: scale(1.65); background: #34d399; }
+
+    /* RIGHT FLOATING ACTION BUTTONS */
+    .right-fab-stack {
+      position: absolute;
+      right: 14px;
+      bottom: 222px;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .fab-btn {
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      background: #ffffff;
+      color: #0f172a;
+      border: none;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.38);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 10px;
+      cursor: pointer;
+    }
+    .fab-btn:active { transform: scale(0.92); }
+    .fab-btn .ico { font-size: 18px; line-height: 1; margin-bottom: 2px; }
+    .fab-btn.active-badge { background: #ecfdf5; color: #065f46; border: 2px solid #10b981; }
+    .fab-btn.gmaps-active { background: #eff6ff; color: #1d4ed8; border: 2px solid #3b82f6; }
+    .fab-btn.warn-badge { background: #fffbeb; color: #92400e; border: 2px solid #f59e0b; }
+
+    /* BOTTOM NAVIGATION SHEET */
+    .bottom-sheet {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: var(--sheet-bg);
+      color: var(--sheet-text);
+      border-radius: 24px 24px 0 0;
+      padding: 12px 18px calc(16px + env(safe-area-inset-bottom));
+      z-index: 1000;
+      box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.4);
+    }
+    .sheet-handle {
+      width: 42px;
+      height: 5px;
+      background: #cbd5e1;
+      border-radius: 99px;
+      margin: 0 auto 8px;
+    }
+    .eta-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .eta-main { font-size: 26px; font-weight: 900; color: #0d9488; line-height: 1.1; }
+    .eta-sub { font-size: 14px; font-weight: 600; color: #64748b; margin-top: 2px; }
+    .btn-group { display: flex; gap: 8px; }
+    .btn-gmaps {
+      background: #2563eb;
+      color: #ffffff;
+      border: none;
+      border-radius: 999px;
+      padding: 11px 15px;
+      font-size: 13px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .btn-exit {
+      background: #dc2626;
+      color: #ffffff;
+      border: none;
+      border-radius: 999px;
+      padding: 11px 16px;
+      font-size: 13px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .target-card {
+      background: #f1f5f9;
+      border: 1.5px solid #cbd5e1;
+      border-left: 6px solid #10b981;
+      border-radius: 14px;
+      padding: 10px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .target-info { flex: 1; overflow: hidden; }
+    .target-title { font-size: 15px; font-weight: 800; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .target-addr { font-size: 12px; color: #475569; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+    .target-pin-box {
+      background: #10b981;
+      color: #052e16;
+      padding: 6px 11px;
+      border-radius: 10px;
+      text-align: center;
+      font-weight: 900;
+      flex-shrink: 0;
+    }
+    .target-pin-box .num { font-size: 16px; line-height: 1.1; }
+    .target-pin-box .lbl { font-size: 10px; text-transform: uppercase; }
+
+    /* 3D NAVIGATION PUCK & MARKERS */
+    .user-puck-3d {
+      width: 46px;
+      height: 46px;
+      border-radius: 50%;
+      background: #ffffff;
+      box-shadow: 0 6px 20px rgba(37, 99, 235, 0.65);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 3px solid #2563eb;
+    }
+    .user-puck-chevron {
+      width: 0;
+      height: 0;
+      border-left: 11px solid transparent;
+      border-right: 11px solid transparent;
+      border-bottom: 22px solid #2563eb;
+      transform: translateY(-2px);
+    }
+    .dest-marker-3d {
+      background: #10b981;
+      color: #052e16;
+      font-weight: 900;
+      font-size: 13px;
+      padding: 5px 11px;
+      border-radius: 999px;
+      border: 2.5px solid #ffffff;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .alt-marker-3d {
+      background: rgba(15, 23, 42, 0.9);
+      color: #34d399;
+      font-weight: 800;
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1.5px solid #10b981;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    #rerouteToast {
+      position: absolute;
+      top: 136px;
+      left: 14px;
+      right: 14px;
+      background: rgba(220, 38, 38, 0.96);
+      color: #fff;
+      padding: 12px 16px;
+      border-radius: 14px;
+      font-size: 14px;
+      font-weight: 700;
+      z-index: 2000;
+      box-shadow: 0 8px 25px rgba(220, 38, 38, 0.5);
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <!-- TOP TURN-BY-TURN HUD -->
+  <div class="top-hud">
+    <div class="turn-banner" id="turnBanner">
+      <div class="turn-icon" id="turnIcon">⬆️</div>
+      <div class="turn-info">
+        <div class="turn-dist">
+          <span id="turnDistText">Đang khóa GPS & La bàn 3D...</span>
+          <span class="cron-pill">
+            <span class="pulse-dot" id="cronDot"></span>
+            <span id="cronStatusText">DIRECT 3s</span>
+          </span>
+        </div>
+        <div class="turn-street" id="turnStreetText">Đang tìm tủ >= 2 pin đầy gần nhất</div>
+      </div>
+    </div>
+    <div class="next-turn-pill">
+      <span>Sau đó</span>
+      <span id="nextTurnIcon">↰</span>
+      <span id="nextTurnText">Tự động xoay bản đồ 3D theo hướng xe</span>
+    </div>
+  </div>
+
+  <div id="rerouteToast"></div>
+
+  <!-- RIGHT FLOATING CONTROLS -->
+  <div class="right-fab-stack">
+    <button class="fab-btn active-badge" onclick="enableCompass3D()" id="btnCompass" title="Bật La bàn tự xoay 3D & Nghiêng 60 độ">
+      <span class="ico">🧭</span>
+      <span id="compassLabel">3D Xoay</span>
+    </button>
+    <button class="fab-btn active-badge" onclick="cycleMinPins()" id="btnMinPins" title="Số pin đầy tối thiểu">
+      <span class="ico">🔋</span>
+      <span id="minPinsLabel">&ge;2 PIN</span>
+    </button>
+    <button class="fab-btn" onclick="toggleMapLayer()" id="btnLayer" title="Đổi nền Google Vệ tinh / Giao thông">
+      <span class="ico">🛰️</span>
+      <span id="layerLabel">Vệ tinh</span>
+    </button>
+    <button class="fab-btn" onclick="toggleAutoGoogleMaps()" id="btnAutoGmaps" title="Tự động bắn sang App Google Maps thật mỗi khi đổi tủ">
+      <span class="ico">🗺️</span>
+      <span id="autoGmapsLabel">Auto GMaps</span>
+    </button>
+    <button class="fab-btn" onclick="skipCurrentStation()" title="Bỏ qua tủ này, chuyển sang tủ gần tiếp theo">
+      <span class="ico">🔀</span>
+      <span>Đổi tủ</span>
+    </button>
+    <button class="fab-btn warn-badge" onclick="simulateOutOfBattery()" title="Test giả lập tủ đang đi đột ngột hết pin">
+      <span class="ico">⚡</span>
+      <span>Test Hết</span>
+    </button>
+  </div>
+
+  <!-- 3D WEBGL MAP (MAPLIBRE GL + GOOGLE MAPS TILES) -->
+  <div id="map"></div>
+
+  <!-- BOTTOM NAVIGATION SHEET -->
+  <div class="bottom-sheet">
+    <div class="sheet-handle"></div>
+    <div class="eta-row">
+      <div>
+        <div class="eta-main" id="etaTimeText">-- phút</div>
+        <div class="eta-sub" id="etaDistText">-- km • Đang tính lộ trình...</div>
+      </div>
+      <div class="btn-group">
+        <button class="btn-gmaps" onclick="openCurrentInGoogleMaps()">Mở App GMaps</button>
+        <button class="btn-exit" onclick="recenterCamera3D()">Tâm 3D</button>
+      </div>
+    </div>
+    <div class="target-card">
+      <div class="target-info">
+        <div class="target-title" id="targetName">Đang quét trực tiếp server VinFast...</div>
+        <div class="target-addr" id="targetAddr">0 qua Worker • Tự động kiểm tra mỗi 3.0 giây</div>
+      </div>
+      <div class="target-pin-box">
+        <div class="num" id="targetPinCount">--/--</div>
+        <div class="lbl">PIN ĐẦY</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // =========================================================================
+    // 1. BỘ NHÂN BẢN ĐỒ 3D TỰ XOAY (MAPLIBRE GL WEBGL + GOOGLE MAPS HYBRID TILES)
+    // =========================================================================
+    let userLat = 21.0362;
+    let userLng = 105.7829;
+    let userHeading = 0; // Góc hướng mũi xe (0 - 360 độ)
+    let is3DPitched = true;
+    let followHeading = true;
+    let currentLayer = 'hybrid';
+    let autoJumpGoogleMaps = false;
+
+    const mapStyle = {
+      version: 8,
+      sources: {
+        'google-hybrid': {
+          type: 'raster',
+          tiles: [
+            'https://mt0.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=vi',
+            'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=vi',
+            'https://mt2.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=vi',
+            'https://mt3.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=vi'
+          ],
+          tileSize: 256
+        },
+        'google-streets': {
+          type: 'raster',
+          tiles: [
+            'https://mt0.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&hl=vi',
+            'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&hl=vi',
+            'https://mt2.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&hl=vi',
+            'https://mt3.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&hl=vi'
+          ],
+          tileSize: 256
+        }
+      },
+      layers: [
+        { id: 'layer-streets', type: 'raster', source: 'google-streets', layout: { visibility: 'none' } },
+        { id: 'layer-hybrid', type: 'raster', source: 'google-hybrid', layout: { visibility: 'visible' } }
+      ]
+    };
+
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: mapStyle,
+      center: [userLng, userLat],
+      zoom: 16.5,
+      pitch: 62, // Nghiêng góc 3D 62 độ giống hệt Google Maps Navigation
+      bearing: 0,
+      attributionControl: false
+    });
+
+    // Tạo Marker mũi tên xe cố định hướng lên phía trước khi bản đồ tự xoay
+    const puckEl = document.createElement('div');
+    puckEl.className = 'user-puck-3d';
+    puckEl.innerHTML = '<div class="user-puck-chevron" id="puckChevron"></div>';
+    const userMarker = new maplibregl.Marker({ element: puckEl, rotationAlignment: 'viewport' })
+      .setLngLat([userLng, userLat])
+      .addTo(map);
+
+    let stationMarkers = [];
+
+    map.on('load', () => {
+      map.addSource('route-source', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+      });
+      map.addLayer({
+        id: 'route-casing',
+        type: 'line',
+        source: 'route-source',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: { 'line-color': '#064e3b', 'line-width': 12, 'line-opacity': 0.9 }
+      });
+      map.addLayer({
+        id: 'route-line',
+        type: 'line',
+        source: 'route-source',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: { 'line-color': '#00e676', 'line-width': 7, 'line-opacity': 1.0 }
+      });
+
+      checkAndNavigate(true);
+    });
+
+    // Chạm lên bản đồ để test di chuyển vị trí xe (và tự động xoay hướng xe theo hướng di chuyển!)
+    map.on('click', (e) => {
+      const newLat = e.lngLat.lat;
+      const newLng = e.lngLat.lng;
+      userHeading = calcBearing(userLat, userLng, newLat, newLng);
+      userLat = newLat;
+      userLng = newLng;
+      syncCamera3D();
+      checkAndNavigate(true);
+    });
+
+    function calcBearing(lat1, lon1, lat2, lon2) {
+      const toRad = (d) => (d * Math.PI) / 180;
+      const toDeg = (r) => (r * 180) / Math.PI;
+      const dLon = toRad(lon2 - lon1);
+      const y = Math.sin(dLon) * Math.cos(toRad(lat2));
+      const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) - Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
+      return (toDeg(Math.atan2(y, x)) + 360) % 360;
+    }
+
+    function syncCamera3D() {
+      userMarker.setLngLat([userLng, userLat]);
+      if (followHeading) {
+        map.easeTo({
+          center: [userLng, userLat],
+          bearing: userHeading,
+          pitch: is3DPitched ? 62 : 0,
+          duration: 350
+        });
+      }
+    }
+
+    // Xin quyền La bàn iPhone (DeviceOrientationEvent) để tự xoay bản đồ 360 độ khi cầm máy xoay
+    async function enableCompass3D() {
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        try {
+          const perm = await DeviceOrientationEvent.requestPermission();
+          if (perm === 'granted') {
+            bindCompassListener();
+          }
+        } catch (e) {}
+      } else {
+        bindCompassListener();
+      }
+      is3DPitched = !is3DPitched;
+      followHeading = true;
+      document.getElementById('compassLabel').textContent = is3DPitched ? '3D Xoay' : '2D Bắc';
+      document.getElementById('btnCompass').classList.toggle('active-badge', is3DPitched);
+      syncCamera3D();
+    }
+
+    function bindCompassListener() {
+      window.addEventListener('deviceorientation', (e) => {
+        if (!followHeading) return;
+        let heading = null;
+        if (typeof e.webkitCompassHeading === 'number') {
+          heading = e.webkitCompassHeading; // Chuẩn la bàn từ trường trên iOS
+        } else if (typeof e.alpha === 'number') {
+          heading = (360 - e.alpha) % 360;
+        }
+        if (heading !== null && Math.abs(heading - userHeading) > 2.5) {
+          userHeading = heading;
+          map.rotateTo(userHeading, { duration: 150 });
+        }
+      }, true);
+    }
+    bindCompassListener();
+
+    function recenterCamera3D() {
+      followHeading = true;
+      is3DPitched = true;
+      map.easeTo({
+        center: [userLng, userLat],
+        zoom: 16.8,
+        pitch: 62,
+        bearing: userHeading,
+        duration: 500
+      });
+    }
+
+    function toggleMapLayer() {
+      if (currentLayer === 'hybrid') {
+        map.setLayoutProperty('layer-hybrid', 'visibility', 'none');
+        map.setLayoutProperty('layer-streets', 'visibility', 'visible');
+        currentLayer = 'streets';
+        document.getElementById('layerLabel').textContent = 'Đường phố';
+      } else {
+        map.setLayoutProperty('layer-streets', 'visibility', 'none');
+        map.setLayoutProperty('layer-hybrid', 'visibility', 'visible');
+        currentLayer = 'hybrid';
+        document.getElementById('layerLabel').textContent = 'Vệ tinh';
+      }
+    }
+
+    // =========================================================================
+    // 2. KẾT NỐI ĐỘC LẬP 100% TỚI SERVER VINFAST (0 QUA WORKER, 0 LIMIT REQUEST)
+    // =========================================================================
+    const VF_API_URL = 'https://escooter-api.vinfast.vn/api-gateway/operation-support/v1.0/battery-swap-stations/near';
+    const VF_HEADERS = {
+      'User-Agent': 'okhttp/4.9.3',
+      'client_id': 'ANDROID000JLNINSJFU43VGQY76BGSN9',
+      'client_secret': 'ANDROID00000JLNINSJFU43VGQY76BGSN945678901234567890123456789654',
+      'app_version': '2.38.3',
+      'platform': 'Android',
+      'Accept-Language': 'vi-VN'
+    };
+
+    let minPinsRequired = 2;
+    let lockedStation = null;
+    let blacklistedCodes = new Set();
+    let simulatedEmptyCodes = new Set();
+    let isChecking = false;
+    let cronCounter = 0;
+    let hasInitialGps = false;
+
+    function haversineKm(lat1, lon1, lat2, lon2) {
+      const R = 6371, toRad = (d) => (d * Math.PI) / 180;
+      const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+      const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+      return 2 * R * Math.asin(Math.sqrt(a));
+    }
+
+    function calcSmartScore(avail, total, distKm) {
+      const ratio = avail / Math.max(total, 1);
+      const cappedAvail = Math.min(avail, 6);
+      return Number((cappedAvail * 2.5 + ratio * 12.0 - distKm * 20.0).toFixed(2));
+    }
+
+    async function fetchDirectVinFastOrLocal(lat, lng, minPins) {
+      // 1. Thử gọi trực tiếp từ iPhone (.ipa WKWebView / Native) tới thẳng server VinFast (0 tốn 1 request nào qua Worker!)
+      try {
+        const directRes = await fetch(`${VF_API_URL}?lat=${lat}&lng=${lng}&distance=5000`, {
+          method: 'GET',
+          headers: VF_HEADERS
+        });
+        if (directRes.ok) {
+          const json = await directRes.json();
+          const raw = json.data || [];
+          return raw
+            .filter((s) => s.status === 'Available' && (s.numberBatteryAvailable || 0) >= minPins)
+            .map((s) => {
+              const straightKm = haversineKm(lat, lng, s.lat, s.lng);
+              const estRoadKm = Number((straightKm * 1.32).toFixed(2));
+              const score = calcSmartScore(s.numberBatteryAvailable || 0, s.numberBattery || 1, estRoadKm);
+              return { ...s, distanceKm: estRoadKm, score };
+            })
+            .sort((a, b) => b.score - a.score || a.distanceKm - b.distanceKm);
+        }
+      } catch (e) {
+        // Nếu đang mở trên trình duyệt PC bị chặn CORS thì fallback về local server 8765
+      }
+
+      const fallbackRes = await fetch(`/api/fast-check?lat=${lat}&lng=${lng}&minPins=${minPins}`);
+      const fallbackData = await fallbackRes.json();
+      return fallbackData.stations || [];
+    }
+
+    // Lắng nghe GPS liên tục từ iPhone
+    if (navigator.geolocation) {
+      navigator.geolocation.watchPosition(
+        (pos) => {
+          const newLat = pos.coords.latitude;
+          const newLng = pos.coords.longitude;
+          if (pos.coords.heading !== null && !isNaN(pos.coords.heading) && pos.coords.speed > 0.5) {
+            userHeading = pos.coords.heading;
+          } else if (haversineKm(userLat, userLng, newLat, newLng) > 0.008) {
+            userHeading = calcBearing(userLat, userLng, newLat, newLng);
+          }
+          userLat = newLat;
+          userLng = newLng;
+          syncCamera3D();
+          if (!hasInitialGps) {
+            hasInitialGps = true;
+            checkAndNavigate(true);
+          }
+        },
+        () => {
+          if (!hasInitialGps) {
+            hasInitialGps = true;
+            checkAndNavigate(true);
+          }
+        },
+        { enableHighAccuracy: true, maximumAge: 1000, timeout: 5000 }
+      );
+    }
+
+    function speakAlert(text, urgent = false) {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = urgent ? 'sawtooth' : 'sine';
+        osc.frequency.setValueAtTime(urgent ? 880 : 587, ctx.currentTime);
+        gain.gain.setValueAtTime(0.18, ctx.currentTime);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + (urgent ? 0.38 : 0.15));
+      } catch (e) {}
+
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.lang = 'vi-VN';
+        utter.rate = 1.08;
+        window.speechSynthesis.speak(utter);
+      }
+    }
+
+    function showRerouteToast(msg) {
+      const el = document.getElementById('rerouteToast');
+      const banner = document.getElementById('turnBanner');
+      el.textContent = msg;
+      el.style.display = 'block';
+      banner.classList.add('rerouting');
+      setTimeout(() => {
+        el.style.display = 'none';
+        banner.classList.remove('rerouting');
+      }, 6000);
+    }
+
+    function toggleAutoGoogleMaps() {
+      autoJumpGoogleMaps = !autoJumpGoogleMaps;
+      document.getElementById('btnAutoGmaps').classList.toggle('gmaps-active', autoJumpGoogleMaps);
+      if (autoJumpGoogleMaps) {
+        speakAlert('Đã bật chế độ tự động đẩy sang ứng dụng Google Maps mỗi khi đổi tủ');
+        openCurrentInGoogleMaps();
+      }
+    }
+
+    function openCurrentInGoogleMaps() {
+      if (!lockedStation) return;
+      const appUrl = `comgooglemaps://?daddr=${lockedStation.lat},${lockedStation.lng}&directionsmode=two-wheeler`;
+      const webUrl = `https://www.google.com/maps/dir/?api=1&destination=${lockedStation.lat},${lockedStation.lng}&travelmode=two-wheeler`;
+      window.location.href = appUrl;
+      setTimeout(() => {
+        if (document.visibilityState === 'visible') {
+          window.open(webUrl, '_blank');
+        }
+      }, 600);
+    }
+
+    function cycleMinPins() {
+      minPinsRequired = minPinsRequired === 2 ? 3 : minPinsRequired === 3 ? 1 : 2;
+      document.getElementById('minPinsLabel').innerHTML = `&ge;${minPinsRequired} PIN`;
+      speakAlert(`Lọc tối thiểu ${minPinsRequired} pin đầy`);
+      checkAndNavigate(true);
+    }
+
+    function skipCurrentStation() {
+      if (lockedStation) {
+        blacklistedCodes.add(lockedStation.code);
+        lockedStation = null;
+        checkAndNavigate(true);
+      }
+    }
+
+    function simulateOutOfBattery() {
+      if (!lockedStation) return;
+      simulatedEmptyCodes.add(lockedStation.code);
+      checkAndNavigate(false);
+    }
+
+    function formatManeuver(step) {
+      if (!step || !step.maneuver) return { icon: '⬆️', text: 'Đi thẳng theo lộ trình' };
+      const type = step.maneuver.type || '';
+      const mod = step.maneuver.modifier || '';
+      const road = step.name ? ` vào ${step.name}` : '';
+      if (type === 'depart') return { icon: '⬆️', text: `Đi thẳng${road}` };
+      if (type === 'arrive') return { icon: '🏁', text: `Đến tủ đổi pin` };
+      if (mod.includes('uturn')) return { icon: '↩️', text: `Quay đầu${road}` };
+      if (mod.includes('sharp left') || mod === 'left') return { icon: '⬅️', text: `Rẽ trái${road}` };
+      if (mod.includes('slight left')) return { icon: '↖️', text: `Chếch sang trái${road}` };
+      if (mod.includes('sharp right') || mod === 'right') return { icon: '➡️', text: `Rẽ phải${road}` };
+      if (mod.includes('slight right')) return { icon: '↗️', text: `Chếch sang phải${road}` };
+      return { icon: '⬆️', text: `Đi thẳng${road}` };
+    }
+
+    async function drawRoute3D(target) {
+      const url = `https://router.project-osrm.org/route/v1/driving/${userLng},${userLat};${target.lng},${target.lat}?overview=full&geometries=geojson&steps=true`;
+      try {
+        const res = await fetch(url);
+        const data = await res.json();
+        if (!data.routes || !data.routes[0]) return;
+        const route = data.routes[0];
+
+        const src = map.getSource('route-source');
+        if (src) {
+          src.setData({
+            type: 'FeatureCollection',
+            features: [{ type: 'Feature', geometry: route.geometry }]
+          });
+        }
+
+        // Tự động xoay góc nhìn 3D của bản đồ hướng thẳng theo đoạn đường xuất phát!
+        const coords = route.geometry.coordinates;
+        if (coords && coords.length >= 2) {
+          const nextPt = coords[Math.min(3, coords.length - 1)];
+          userHeading = calcBearing(userLat, userLng, nextPt[1], nextPt[0]);
+          syncCamera3D();
+        }
+
+        const distKm = (route.distance / 1000).toFixed(2);
+        const durMin = Math.max(1, Math.round(route.duration / 60));
+        const arrival = new Date(Date.now() + route.duration * 1000);
+        const hh = String(arrival.getHours()).padStart(2, '0');
+        const mm = String(arrival.getMinutes()).padStart(2, '0');
+
+        lockedStation.distanceKm = Number(distKm);
+        document.getElementById('etaTimeText').textContent = `${durMin} phút`;
+        document.getElementById('etaDistText').textContent = `${distKm.replace('.', ',')} km • ${hh}:${mm}`;
+
+        const steps = (route.legs && route.legs[0] && route.legs[0].steps) || [];
+        const currentStep = steps.length > 1 ? steps[1] : steps[0];
+        const nextStep = steps.length > 2 ? steps[2] : null;
+
+        if (currentStep) {
+          const m1 = formatManeuver(currentStep);
+          const stepDist = steps[0] ? Math.round(steps[0].distance) : 0;
+          document.getElementById('turnIcon').textContent = m1.icon;
+          document.getElementById('turnDistText').textContent = stepDist > 0 ? `Cách ${stepDist} m` : 'Ngay phía trước';
+          document.getElementById('turnStreetText').textContent = m1.text;
+        }
+        if (nextStep) {
+          const m2 = formatManeuver(nextStep);
+          document.getElementById('nextTurnIcon').textContent = m2.icon;
+          document.getElementById('nextTurnText').textContent = m2.text;
+        } else {
+          document.getElementById('nextTurnIcon').textContent = '🏁';
+          document.getElementById('nextTurnText').textContent = target.name;
+        }
+      } catch (e) {}
+    }
+
+    // =========================================================================
+    // 3. CRON 3 GIÂY KIỂM TRA TRỰC TIẾP & TỰ ĐỘNG BẺ LÁI KHI TỦ < 2 PIN
+    // =========================================================================
+    async function checkAndNavigate(forceRecalcRoute = false) {
+      if (isChecking) return;
+      isChecking = true;
+      cronCounter++;
+
+      const dot = document.getElementById('cronDot');
+      dot.classList.add('ping');
+      setTimeout(() => dot.classList.remove('ping'), 350);
+
+      try {
+        const allAvailable = await fetchDirectVinFastOrLocal(userLat, userLng, minPinsRequired);
+        const qualified = allAvailable.filter(
+          (s) =>
+            !blacklistedCodes.has(s.code) &&
+            !simulatedEmptyCodes.has(s.code) &&
+            s.status === 'Available' &&
+            (s.numberBatteryAvailable || 0) >= minPinsRequired
+        );
+
+        document.getElementById('cronStatusText').textContent = `DIRECT 3s (#${cronCounter})`;
+
+        let currentStillValid = null;
+        if (lockedStation) {
+          currentStillValid = qualified.find((s) => s.code === lockedStation.code) || null;
+        }
+
+        if (lockedStation && !currentStillValid) {
+          // TỦ ĐANG ĐI ĐỘT NGỘT TỤT XUỐNG < 2 PIN HOẶC HẾT PIN!
+          const oldName = lockedStation.name;
+          const nextBest = qualified[0] || null;
+          if (nextBest) {
+            lockedStation = nextBest;
+            const alertMsg = `Cảnh báo! Tủ ${oldName} đã hết pin đủ điều kiện. Tự động đổi hướng sang tủ ${nextBest.name}, còn ${nextBest.numberBatteryAvailable} trên ${nextBest.numberBattery} pin đầy!`;
+            showRerouteToast(alertMsg);
+            speakAlert(alertMsg, true);
+            await drawRoute3D(lockedStation);
+            if (autoJumpGoogleMaps) {
+              openCurrentInGoogleMaps();
+            }
+          } else {
+            lockedStation = null;
+            showRerouteToast(`Không còn tủ nào đủ >= ${minPinsRequired} pin đầy quanh đây!`);
+            speakAlert(`Cảnh báo, không còn tủ nào đủ ${minPinsRequired} pin đầy!`, true);
+          }
+        } else if (!lockedStation && qualified.length > 0) {
+          lockedStation = qualified[0];
+          speakAlert(`Khóa mục tiêu tủ ${lockedStation.name}, sẵn sàng ${lockedStation.numberBatteryAvailable} trên ${lockedStation.numberBattery} pin đầy.`);
+          await drawRoute3D(lockedStation);
+        } else if (currentStillValid) {
+          lockedStation = currentStillValid;
+          if (forceRecalcRoute) {
+            await drawRoute3D(lockedStation);
+          }
+        }
+
+        // Vẽ các ghim 3D của trạm đổi pin lên bản đồ
+        stationMarkers.forEach((m) => m.remove());
+        stationMarkers = [];
+        qualified.slice(0, 8).forEach((st) => {
+          const isTarget = lockedStation && st.code === lockedStation.code;
+          const el = document.createElement('div');
+          el.className = isTarget ? 'dest-marker-3d' : 'alt-marker-3d';
+          el.textContent = `${st.numberBatteryAvailable}/${st.numberBattery} PIN`;
+          el.onclick = (ev) => {
+            ev.stopPropagation();
+            lockedStation = st;
+            speakAlert(`Đổi sang tủ ${st.name}, còn ${st.numberBatteryAvailable} pin đầy`);
+            drawRoute3D(st);
+            updateBottomCard();
+          };
+          const marker = new maplibregl.Marker({ element: el })
+            .setLngLat([st.lng, st.lat])
+            .addTo(map);
+          stationMarkers.push(marker);
+        });
+
+        updateBottomCard();
+      } catch (e) {
+        console.error(e);
+      } finally {
+        isChecking = false;
+      }
+    }
+
+    function updateBottomCard() {
+      if (!lockedStation) {
+        document.getElementById('targetName').textContent = `Không có tủ nào >= ${minPinsRequired} pin đầy`;
+        document.getElementById('targetAddr').textContent = 'Hãy bấm nút >=2 PIN bên phải để hạ xuống >=1 PIN';
+        document.getElementById('targetPinCount').textContent = '0/0';
+        return;
+      }
+      document.getElementById('targetName').textContent = lockedStation.name;
+      document.getElementById('targetAddr').textContent = `${lockedStation.address} • Mã: ${lockedStation.code}`;
+      document.getElementById('targetPinCount').textContent = `${lockedStation.numberBatteryAvailable}/${lockedStation.numberBattery}`;
+    }
+
+    setInterval(() => {
+      checkAndNavigate(false);
+    }, 3000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>vi</string>
+    <key>CFBundleDisplayName</key>
+    <string>VFSwap 3D</string>
+    <key>CFBundleExecutable</key>
+    <string>VFSwapNavigator</string>
+    <key>CFBundleIdentifier</key>
+    <string>vn.vfswap.navigator3d</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>VFSwapNavigator</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>2.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>2</string>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <key>LSApplicationQueriesSchemes</key>
+    <array>
+        <string>comgooglemaps</string>
+    </array>
+    <key>UIRequiredDeviceCapabilities</key>
+    <array>
+        <string>arm64</string>
+        <string>location-services</string>
+        <string>gps</string>
+    </array>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Ứng dụng cần GPS và La bàn để xoay bản đồ 3D theo hướng lái xe và tìm tủ đổi pin gần nhất có >= 2 pin đầy.</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>Ứng dụng cần chạy nền kiểm tra tủ pin mỗi 3 giây và tự động đổi lộ trình trên Google Maps khi tủ hết pin.</string>
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>location</string>
+        <string>audio</string>
+    </array>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
+</dict>
+</plist>

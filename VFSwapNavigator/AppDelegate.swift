@@ -369,7 +369,7 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         targetAddrLabel.text = "Hãy chọn 'Cho phép khi dùng ứng dụng' nếu iPhone hỏi quyền Vị Trí."
         targetAddrLabel.font = UIFont.systemFont(ofSize: 13, weight: .medium)
         targetAddrLabel.textColor = UIColor(red: 0.75, green: 0.80, blue: 0.88, alpha: 1.0)
-        targetAddrLabel.numberOfLines = 2
+        targetAddrLabel.numberOfLines = 0
 
         targetDistLabel.text = "Lộ trình thực tế: -- km"
         targetDistLabel.font = UIFont.systemFont(ofSize: 15, weight: .heavy)
@@ -622,10 +622,12 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
                         copy.distanceKm = locked.distanceKm
                         copy.durationMin = locked.durationMin
                     }
-                    copy.score = self.calcSmartScore(avail: copy.avail, total: copy.total, distKm: copy.distanceKm)
                     return copy
                 }
-                updated.sort { $0.score > $1.score }
+                updated.sort {
+                    if $0.distanceKm != $1.distanceKm { return $0.distanceKm < $1.distanceKm }
+                    return $0.avail > $1.avail
+                }
                 self.handleScanResult(qualified: updated, autoOpenGMapsOnLock: autoOpenGMapsOnLock)
             }
         }
@@ -636,14 +638,16 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         let coords = ([String(format: "%.6f,%.6f", lng, lat)] + targets.map { String(format: "%.6f,%.6f", $0.lng, $0.lat) }).joined(separator: ";")
         let urlStr = "https://router.project-osrm.org/table/v1/driving/\(coords)?sources=0&annotations=distance,duration"
         guard let url = URL(string: urlStr) else {
-            completion(stations.sorted { $0.score > $1.score })
+            completion(stations.sorted {
+                if $0.distanceKm != $1.distanceKm { return $0.distanceKm < $1.distanceKm }
+                return $0.avail > $1.avail
+            })
             return
         }
 
         var req = URLRequest(url: url, timeoutInterval: 5)
         req.setValue("VFSwapRadar/3.0", forHTTPHeaderField: "User-Agent")
-        URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
-            guard let self = self else { return }
+        URLSession.shared.dataTask(with: req) { data, _, _ in
             var enriched = targets
             if let data = data,
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -657,11 +661,13 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
                         if let durRow = durRow, i + 1 < durRow.count, let secs = durRow[i + 1] as? Double {
                             enriched[i].durationMin = max(1, Int(round(secs / 60.0)))
                         }
-                        enriched[i].score = self.calcSmartScore(avail: enriched[i].avail, total: enriched[i].total, distKm: km)
                     }
                 }
             }
-            enriched.sort { $0.score > $1.score }
+            enriched.sort {
+                if $0.distanceKm != $1.distanceKm { return $0.distanceKm < $1.distanceKm }
+                return $0.avail > $1.avail
+            }
             completion(enriched)
         }.resume()
     }
@@ -715,8 +721,9 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
     // MARK: - 6. CẬP NHẬT GIAO DIỆN & ĐIỀU KHIỂN GOOGLE MAPS
     private func refreshUI() {
         if let st = lockedStation {
+            let charging = max(0, st.total - st.avail)
             targetNameLabel.text = st.name
-            targetAddrLabel.text = "\(st.address)\(st.commune.isEmpty ? "" : " • " + st.commune) (Mã: \(st.code))"
+            targetAddrLabel.text = "\(st.address)\(st.commune.isEmpty ? "" : " • " + st.commune) (Mã: \(st.code))\n🔋 Sẵn sàng rút: \(st.avail) cục (≥95%) • Đang sạc khóa khay: \(charging) cục"
             targetPinBadge.text = "  \(st.avail)/\(st.total) PIN ĐẦY  "
             let durStr = st.durationMin != nil ? " (~\(st.durationMin!) phút lái xe)" : ""
             targetDistLabel.text = "🛵 Lộ trình đường bộ: \(st.distanceKm) km\(durStr)"
@@ -730,6 +737,7 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         top5Stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for (idx, st) in topStations.enumerated() {
             let isLocked = lockedStation?.code == st.code
+            let charging = max(0, st.total - st.avail)
             let card = UIButton(type: .system)
             card.backgroundColor = isLocked
                 ? UIColor(red: 0.06, green: 0.24, blue: 0.20, alpha: 1.0)
@@ -747,8 +755,8 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
             lbl.isUserInteractionEnabled = false
             lbl.translatesAutoresizingMaskIntoConstraints = false
             let durStr = st.durationMin != nil ? " (~\(st.durationMin!)p)" : ""
-            let prefix = isLocked ? "🎯 [ĐANG KHÓA] " : "#\(idx + 1) • "
-            let text = "\(prefix)\(st.distanceKm) km\(durStr)  —  [\(st.avail)/\(st.total) PIN ĐẦY]\n\(st.name)\n\(st.address)"
+            let prefix = isLocked ? "🎯 [GẦN NHẤT - ĐANG KHÓA] " : "#\(idx + 1) • "
+            let text = "\(prefix)\(st.distanceKm) km\(durStr)  —  [\(st.avail)/\(st.total) PIN ĐẦY]\n\(st.name)\n\(st.address)\n🔋 Rút ngay: \(st.avail) cục (≥95%) • Đang sạc: \(charging) cục"
             lbl.text = text
             lbl.font = UIFont.systemFont(ofSize: 13, weight: .semibold)
             lbl.textColor = .white

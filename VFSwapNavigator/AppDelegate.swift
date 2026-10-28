@@ -15,8 +15,10 @@ struct SwapStation {
     let status: String
     var straightKm: Double
     var distanceKm: Double
+    var effectiveDistanceKm: Double
     var durationMin: Int?
-    var score: Double
+    var bearingDeg: Double
+    var isAheadOfCourse: Bool
 
     var googleMapsAppUrl: URL? {
         URL(string: String(format: "comgooglemaps://?daddr=%.6f,%.6f&directionsmode=two-wheeler", lat, lng))
@@ -54,14 +56,25 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
     private var cronTimer: Timer?
     private var bgTask: UIBackgroundTaskIdentifier = .invalid
 
-    // Trạng thái GPS & Trạm
+    // Trạng thái GPS, Hướng Di Chuyển (Course) & Trạm
     private var userLat: Double = 0.0
     private var userLng: Double = 0.0
+    private var prevGpsLat: Double = 0.0
+    private var prevGpsLng: Double = 0.0
     private var userAccuracy: Double = 9999.0
+    private var userCourse: Double = -1.0
+    private var userSpeed: Double = 0.0
     private var hasRealGps: Bool = false
+
     private var lastLockedLat: Double = 0.0
     private var lastLockedLng: Double = 0.0
+    private var lastDeepScanLat: Double = 0.0
+    private var lastDeepScanLng: Double = 0.0
     private var bestAccuracyAtLock: Double = 9999.0
+
+    // Theo dõi khoảng cách ngắn nhất từng đạt được tới tủ đang khóa để phát hiện đi xa (Moving Away)
+    private var minDistanceToLockedKm: Double = 9999.0
+    private var autoRerouteByDirection: Bool = true
 
     private var minPinsRequired: Int = 2
     private var lockedStation: SwapStation?
@@ -81,6 +94,7 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
     private let targetPinBadge = UILabel()
     private let targetDistLabel = UILabel()
     private let btnFilterPins = UIButton(type: .system)
+    private let btnToggleDirection = UIButton(type: .system)
     private let btnOpenGMaps = UIButton(type: .system)
     private let btnTestBgReroute = UIButton(type: .system)
     private let btnSkipStation = UIButton(type: .system)
@@ -110,7 +124,7 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         )
     }
 
-    // MARK: - 1. SILENT AUDIO KEEP-ALIVE (Giữ Cron 3s sống 100% khi đang mở Google Maps)
+    // MARK: - 1. SILENT AUDIO KEEP-ALIVE (Giữ Cron 3s & GPS sống khi đang mở Google Maps)
     private func setupAudioKeepAlive() {
         do {
             let session = AVAudioSession.sharedInstance()
@@ -167,6 +181,7 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         if silentPlayer?.isPlaying != true {
             silentPlayer?.play()
         }
+        locationManager.startUpdatingLocation()
         bgTask = UIApplication.shared.beginBackgroundTask(withName: "VFSwapCron") { [weak self] in
             if let task = self?.bgTask, task != .invalid {
                 UIApplication.shared.endBackgroundTask(task)
@@ -180,7 +195,6 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
             UIApplication.shared.endBackgroundTask(bgTask)
             bgTask = .invalid
         }
-        // Nếu vừa có thông báo đổi tủ khi đang xem Google Maps và người dùng chạm vào thông báo/quay lại app -> Nhảy thẳng sang Google Maps tủ mới!
         if pendingAutoOpenGoogleMaps, let st = lockedStation {
             pendingAutoOpenGoogleMaps = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
@@ -196,13 +210,12 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
     }
 
-    private func sendRerouteNotification(oldName: String, newStation: SwapStation) {
+    private func sendBannerNotification(title: String, body: String, station: SwapStation) {
         let content = UNMutableNotificationContent()
-        content.title = "⚠️ TỦ ĐANG ĐI ĐÃ HẾT PIN! CHẠM ĐỂ ĐỔI HƯỚNG"
-        let durText = newStation.durationMin != nil ? " (~\(newStation.durationMin!)p)" : ""
-        content.body = "Đã khóa tủ mới: \(newStation.name) [\(newStation.avail)/\(newStation.total) PIN • \(newStation.distanceKm)km\(durText)]. Chạm vào đây để cập nhật Google Maps ngay!"
+        content.title = title
+        content.body = body
         content.sound = .default
-        content.userInfo = ["code": newStation.code]
+        content.userInfo = ["code": station.code]
 
         let req = UNNotificationRequest(identifier: "VF_REROUTE_\(UUID().uuidString)", content: content, trigger: nil)
         UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
@@ -258,7 +271,7 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
 
         let content = UIStackView()
         content.axis = .vertical
-        content.spacing = 12
+        content.spacing = 11
         content.translatesAutoresizingMaskIntoConstraints = false
         scroll.addSubview(content)
 
@@ -269,42 +282,42 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
             scroll.leadingAnchor.constraint(equalTo: safe.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: safe.trailingAnchor),
 
-            content.topAnchor.constraint(equalTo: scroll.topAnchor, constant: 12),
+            content.topAnchor.constraint(equalTo: scroll.topAnchor, constant: 10),
             content.bottomAnchor.constraint(equalTo: scroll.bottomAnchor, constant: -24),
             content.leadingAnchor.constraint(equalTo: scroll.leadingAnchor, constant: 14),
             content.trailingAnchor.constraint(equalTo: scroll.trailingAnchor, constant: -14),
             content.widthAnchor.constraint(equalTo: scroll.widthAnchor, constant: -28)
         ])
 
-        // Header Row
+        // Header Row 1: Status & Buttons
         let headerRow = UIStackView()
         headerRow.axis = .horizontal
         headerRow.alignment = .center
         headerRow.distribution = .equalSpacing
 
-        statusBadge.text = "🟢 CANH PIN NGẦM 3s (#0)"
-        statusBadge.font = UIFont.systemFont(ofSize: 13, weight: .heavy)
+        statusBadge.text = "🟢 CANH PIN & HƯỚNG ĐI 3s (#0)"
+        statusBadge.font = UIFont.systemFont(ofSize: 12.5, weight: .heavy)
         statusBadge.textColor = UIColor(red: 0.20, green: 0.90, blue: 0.60, alpha: 1.0)
 
         let rightBtns = UIStackView()
         rightBtns.axis = .horizontal
-        rightBtns.spacing = 8
+        rightBtns.spacing = 6
 
         btnFilterPins.setTitle(">= 2 PIN", for: .normal)
-        btnFilterPins.titleLabel?.font = UIFont.systemFont(ofSize: 12, weight: .bold)
+        btnFilterPins.titleLabel?.font = UIFont.systemFont(ofSize: 11.5, weight: .bold)
         btnFilterPins.backgroundColor = UIColor(red: 0.12, green: 0.18, blue: 0.28, alpha: 1.0)
         btnFilterPins.setTitleColor(.white, for: .normal)
         btnFilterPins.layer.cornerRadius = 8
-        btnFilterPins.contentEdgeInsets = UIEdgeInsets(top: 7, left: 10, bottom: 7, right: 10)
+        btnFilterPins.contentEdgeInsets = UIEdgeInsets(top: 6, left: 9, bottom: 6, right: 9)
         btnFilterPins.addTarget(self, action: #selector(onTapFilterPins), for: .touchUpInside)
 
         let btnRefreshGps = UIButton(type: .system)
         btnRefreshGps.setTitle("↻ GPS Mới", for: .normal)
-        btnRefreshGps.titleLabel?.font = UIFont.systemFont(ofSize: 12, weight: .heavy)
+        btnRefreshGps.titleLabel?.font = UIFont.systemFont(ofSize: 11.5, weight: .heavy)
         btnRefreshGps.backgroundColor = UIColor(red: 0.06, green: 0.72, blue: 0.50, alpha: 1.0)
         btnRefreshGps.setTitleColor(UIColor(red: 0.02, green: 0.18, blue: 0.10, alpha: 1.0), for: .normal)
         btnRefreshGps.layer.cornerRadius = 8
-        btnRefreshGps.contentEdgeInsets = UIEdgeInsets(top: 7, left: 11, bottom: 7, right: 11)
+        btnRefreshGps.contentEdgeInsets = UIEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
         btnRefreshGps.addTarget(self, action: #selector(onTapRefreshGps), for: .touchUpInside)
 
         rightBtns.addArrangedSubview(btnFilterPins)
@@ -313,6 +326,18 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         headerRow.addArrangedSubview(statusBadge)
         headerRow.addArrangedSubview(rightBtns)
         content.addArrangedSubview(headerRow)
+
+        // Header Row 2: Direction Reroute Toggle Button
+        btnToggleDirection.setTitle("🧭 Tự động đổi sang tủ gần nhất theo hướng di chuyển: BẬT", for: .normal)
+        btnToggleDirection.titleLabel?.font = UIFont.systemFont(ofSize: 12, weight: .bold)
+        btnToggleDirection.backgroundColor = UIColor(red: 0.07, green: 0.25, blue: 0.22, alpha: 1.0)
+        btnToggleDirection.setTitleColor(UIColor(red: 0.43, green: 0.91, blue: 0.72, alpha: 1.0), for: .normal)
+        btnToggleDirection.layer.cornerRadius = 10
+        btnToggleDirection.layer.borderWidth = 1
+        btnToggleDirection.layer.borderColor = UIColor(red: 0.06, green: 0.72, blue: 0.50, alpha: 0.6).cgColor
+        btnToggleDirection.contentEdgeInsets = UIEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
+        btnToggleDirection.addTarget(self, action: #selector(onTapToggleDirection), for: .touchUpInside)
+        content.addArrangedSubview(btnToggleDirection)
 
         // GPS Label
         gpsLabel.text = "📍 Đang lấy tọa độ GPS vệ tinh chính xác từ iPhone..."
@@ -346,7 +371,7 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         topTargetRow.alignment = .center
         topTargetRow.distribution = .equalSpacing
 
-        targetTitleLabel.text = "🎯 TỦ ĐANG KHÓA MỤC TIÊU"
+        targetTitleLabel.text = "🎯 TỦ GẦN NHẤT ĐANG KHÓA"
         targetTitleLabel.font = UIFont.systemFont(ofSize: 12, weight: .heavy)
         targetTitleLabel.textColor = UIColor(red: 0.38, green: 0.65, blue: 0.98, alpha: 1.0)
 
@@ -381,7 +406,6 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         targetStack.addArrangedSubview(targetDistLabel)
         content.addArrangedSubview(targetCard)
 
-        // Action Buttons (100% Google Maps)
         btnOpenGMaps.setTitle("🗺️ MỞ GOOGLE MAPS DẪN ĐƯỜNG NGAY", for: .normal)
         btnOpenGMaps.titleLabel?.font = UIFont.systemFont(ofSize: 15, weight: .black)
         btnOpenGMaps.backgroundColor = UIColor(red: 0.15, green: 0.39, blue: 0.92, alpha: 1.0)
@@ -396,7 +420,7 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         subActionRow.spacing = 10
         subActionRow.distribution = .fillEqually
 
-        btnTestBgReroute.setTitle("🧪 Test Hết Pin (6s)", for: .normal)
+        btnTestBgReroute.setTitle("🧪 Test Đổi Tủ (6s)", for: .normal)
         btnTestBgReroute.titleLabel?.font = UIFont.systemFont(ofSize: 13, weight: .bold)
         btnTestBgReroute.backgroundColor = UIColor(red: 0.85, green: 0.47, blue: 0.02, alpha: 1.0)
         btnTestBgReroute.setTitleColor(.white, for: .normal)
@@ -416,17 +440,15 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         subActionRow.addArrangedSubview(btnSkipStation)
         content.addArrangedSubview(subActionRow)
 
-        // Note box explaining how background Google Maps switching works
         let infoNote = UILabel()
-        infoNote.text = "💡 Khi bạn đang mở Google Maps: App vẫn chạy ngầm quét pin mỗi 3 giây. Nếu tủ hết pin, loa sẽ đọc báo động Tiếng Việt và hiện Banner ngay trên đầu Google Maps — chạm 1 cái vào Banner là Google Maps tự bẻ lái sang tủ mới!"
-        infoNote.font = UIFont.systemFont(ofSize: 12, weight: .medium)
+        infoNote.text = "💡 Tự động đổi tủ khi: (1) Tủ đang đi hết pin (<2 pin), HOẶC (2) Bạn đi xa khỏi tủ đang khóa >= 300m, HOẶC (3) Trên hướng bạn chạy xuất hiện tủ khác gần hơn từ 250m trở lên. Chạm vào Banner thông báo trên đầu Google Maps để bẻ lái ngay!"
+        infoNote.font = UIFont.systemFont(ofSize: 11.5, weight: .medium)
         infoNote.textColor = UIColor(red: 0.58, green: 0.64, blue: 0.72, alpha: 1.0)
         infoNote.numberOfLines = 0
         content.addArrangedSubview(infoNote)
 
-        // Top 5 Section Title
         let top5Header = UILabel()
-        top5Header.text = "📋 TOP 5 TỦ CÒN PIN GẦN NHẤT (CHẠM ĐỂ MỞ GOOGLE MAPS)"
+        top5Header.text = "📋 TOP 5 TỦ GẦN NHẤT THEO VỊ TRÍ & HƯỚNG ĐI"
         top5Header.font = UIFont.systemFont(ofSize: 13, weight: .heavy)
         top5Header.textColor = UIColor(red: 0.06, green: 0.72, blue: 0.50, alpha: 1.0)
         content.addArrangedSubview(top5Header)
@@ -436,11 +458,13 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         content.addArrangedSubview(top5Stack)
     }
 
-    // MARK: - 4. ĐỊNH VỊ GPS VỆ TINH TRỰC TIẾP
+    // MARK: - 4. ĐỊNH VỊ GPS VỆ TINH & TÍNH HƯỚNG DI CHUYỂN (COURSE VECTOR)
     private func setupLocation() {
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
         locationManager.distanceFilter = kCLDistanceFilterNone
+        locationManager.pausesLocationUpdatesAutomatically = false
+        locationManager.requestAlwaysAuthorization()
         locationManager.requestWhenInUseAuthorization()
         locationManager.startUpdatingLocation()
     }
@@ -451,41 +475,71 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let loc = locations.last, loc.horizontalAccuracy >= 0 else { return }
-        userLat = loc.coordinate.latitude
-        userLng = loc.coordinate.longitude
+        let newLat = loc.coordinate.latitude
+        let newLng = loc.coordinate.longitude
+
+        // Tính góc di chuyển (Course 0..360) từ phần cứng GPS hoặc từ vector dịch chuyển thực tế (>20m)
+        if loc.course >= 0 && loc.speed > 1.5 {
+            userCourse = loc.course
+        } else if prevGpsLat != 0 {
+            let stepKm = haversineKm(prevGpsLat, prevGpsLng, newLat, newLng)
+            if stepKm >= 0.020 {
+                userCourse = calcBearingDeg(prevGpsLat, prevGpsLng, newLat, newLng)
+                prevGpsLat = newLat
+                prevGpsLng = newLng
+            }
+        } else {
+            prevGpsLat = newLat
+            prevGpsLng = newLng
+        }
+
+        userLat = newLat
+        userLng = newLng
         userAccuracy = loc.horizontalAccuracy
+        userSpeed = max(0.0, loc.speed)
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            let courseStr = self.userCourse >= 0 ? String(format: " • Hướng: %.0f°", self.userCourse) : ""
             self.gpsLabel.text = String(
-                format: "📍 GPS Trực Tiếp: %.5f, %.5f (±%.0fm)",
-                self.userLat, self.userLng, self.userAccuracy
+                format: "📍 GPS: %.5f, %.5f (±%.0fm)%@",
+                self.userLat, self.userLng, self.userAccuracy, courseStr
             )
         }
 
-        let movedKm = lastLockedLat != 0 ? haversineKm(lastLockedLat, lastLockedLng, userLat, userLng) : 999.0
+        let movedFromFirstLockKm = lastLockedLat != 0 ? haversineKm(lastLockedLat, lastLockedLng, userLat, userLng) : 999.0
+        let movedFromLastDeepScanKm = lastDeepScanLat != 0 ? haversineKm(lastDeepScanLat, lastDeepScanLng, userLat, userLng) : 999.0
+
         if !hasRealGps {
             hasRealGps = true
             lastLockedLat = userLat
             lastLockedLng = userLng
             bestAccuracyAtLock = userAccuracy
             lockedStation = nil
+            minDistanceToLockedKm = 9999.0
             checkStationsNow(deepScan: true, autoOpenGMapsOnLock: false)
-        } else if movedKm > 0.12 && userAccuracy < bestAccuracyAtLock * 0.8 {
-            // Chốt lại tủ gần nhất khi GPS chuyển từ trạm phát sóng sang vệ tinh chính xác
+        } else if movedFromFirstLockKm > 0.12 && userAccuracy < bestAccuracyAtLock * 0.8 {
             lastLockedLat = userLat
             lastLockedLng = userLng
             bestAccuracyAtLock = userAccuracy
             lockedStation = nil
+            minDistanceToLockedKm = 9999.0
+            checkStationsNow(deepScan: true, autoOpenGMapsOnLock: false)
+        } else if movedFromLastDeepScanKm >= 0.14 {
+            // Mỗi khi xe di chuyển thêm >= 140m, quét lại bán kính 5 tâm + khoảng cách đường bộ OSRM để bám sát vị trí mới!
             checkStationsNow(deepScan: true, autoOpenGMapsOnLock: false)
         }
     }
 
-    // MARK: - 5. CRON 3 GIÂY & QUÉT TRỰC TIẾP API VINFAST + OSRM
+    // MARK: - 5. CRON 3 GIÂY & THUẬT TOÁN TỰ ĐỔI TỦ THEO HƯỚNG DI CHUYỂN
     private func startCronTimer() {
         let timer = Timer(timeInterval: 3.0, repeats: true) { [weak self] _ in
-            guard let self = self, self.hasRealGps else { return }
-            self.checkStationsNow(deepScan: false, autoOpenGMapsOnLock: false)
+            guard let self = self else { return }
+            // Giữ luồng GPS luôn thức khi chạy ngầm cùng Silent Audio
+            self.locationManager.startUpdatingLocation()
+            guard self.hasRealGps else { return }
+            let movedKm = self.lastDeepScanLat != 0 ? self.haversineKm(self.lastDeepScanLat, self.lastDeepScanLng, self.userLat, self.userLng) : 999.0
+            self.checkStationsNow(deepScan: movedKm >= 0.14, autoOpenGMapsOnLock: false)
         }
         RunLoop.main.add(timer, forMode: .common)
         self.cronTimer = timer
@@ -500,10 +554,32 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         return 2 * R * asin(sqrt(a))
     }
 
-    private func calcSmartScore(avail: Int, total: Int, distKm: Double) -> Double {
-        let ratio = Double(avail) / Double(max(total, 1))
-        let cappedAvail = Double(min(avail, 6))
-        return (cappedAvail * 2.5) + (ratio * 12.0) - (distKm * 20.0)
+    private func calcBearingDeg(_ lat1: Double, _ lon1: Double, _ lat2: Double, _ lon2: Double) -> Double {
+        let p1 = lat1 * .pi / 180.0
+        let p2 = lat2 * .pi / 180.0
+        let dLon = (lon2 - lon1) * .pi / 180.0
+        let y = sin(dLon) * cos(p2)
+        let x = cos(p1) * sin(p2) - sin(p1) * cos(p2) * cos(dLon)
+        let brng = atan2(y, x) * 180.0 / .pi
+        return (brng + 360.0).truncatingRemainder(dividingBy: 360.0)
+    }
+
+    private func absAngleDiff(_ a: Double, _ b: Double) -> Double {
+        let diff = abs(a - b).truncatingRemainder(dividingBy: 360.0)
+        return diff > 180.0 ? 360.0 - diff : diff
+    }
+
+    // Tính khoảng cách hiệu dụng có xét đến hướng mũi xe đang chạy (phạt +0.30km nếu tủ nằm ngược phía sau lưng xe >120 độ)
+    private func computeEffectiveDistance(roadKm: Double, bearingToStation: Double) -> (Double, Bool) {
+        guard autoRerouteByDirection, userCourse >= 0 else {
+            return (roadKm, false)
+        }
+        let diff = absAngleDiff(userCourse, bearingToStation)
+        let isAhead = diff <= 70.0
+        if diff > 120.0 {
+            return (roadKm + 0.30, false)
+        }
+        return (roadKm, isAhead)
     }
 
     private func makeVinFastRequest(lat: Double, lng: Double) -> URLRequest? {
@@ -532,6 +608,10 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         let lng = userLng
         let minPins = minPinsRequired
         let useDeep = deepScan || lockedStation == nil
+        if useDeep {
+            lastDeepScanLat = lat
+            lastDeepScanLng = lng
+        }
 
         var points: [(Double, Double)] = [(lat, lng)]
         if useDeep {
@@ -574,7 +654,8 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
 
                     let straight = self.haversineKm(lat, lng, sLat, sLng)
                     let estRoad = Double(round(straight * 1.32 * 100) / 100)
-                    let score = self.calcSmartScore(avail: avail, total: total, distKm: estRoad)
+                    let brng = self.calcBearingDeg(lat, lng, sLat, sLng)
+                    let (effDist, isAhead) = self.computeEffectiveDistance(roadKm: estRoad, bearingToStation: brng)
 
                     rawStations.append(
                         SwapStation(
@@ -589,8 +670,10 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
                             status: status,
                             straightKm: straight,
                             distanceKm: estRoad,
+                            effectiveDistanceKm: effDist,
                             durationMin: max(1, Int(round(estRoad * 2.5))),
-                            score: score
+                            bearingDeg: brng,
+                            isAheadOfCourse: isAhead
                         )
                     )
                 }
@@ -612,19 +695,29 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
                     self.handleScanResult(qualified: finalSorted, autoOpenGMapsOnLock: autoOpenGMapsOnLock)
                 }
             } else {
-                // Giữ nguyên khoảng cách OSRM đã tính trước đó nếu có
                 var updated = qualified.map { st -> SwapStation in
                     var copy = st
+                    let currentStraight = self.haversineKm(lat, lng, st.lat, st.lng)
+                    copy.straightKm = currentStraight
                     if let prev = self.topStations.first(where: { $0.code == st.code }) {
-                        copy.distanceKm = prev.distanceKm
+                        // Nội suy khoảng cách đường bộ theo sự thay đổi vị trí GPS trực tiếp
+                        let delta = currentStraight - prev.straightKm
+                        copy.distanceKm = max(0.05, Double(round((prev.distanceKm + delta * 1.25) * 100) / 100))
                         copy.durationMin = prev.durationMin
                     } else if let locked = self.lockedStation, locked.code == st.code {
-                        copy.distanceKm = locked.distanceKm
+                        let delta = currentStraight - locked.straightKm
+                        copy.distanceKm = max(0.05, Double(round((locked.distanceKm + delta * 1.25) * 100) / 100))
                         copy.durationMin = locked.durationMin
                     }
+                    let brng = self.calcBearingDeg(lat, lng, copy.lat, copy.lng)
+                    let (effDist, isAhead) = self.computeEffectiveDistance(roadKm: copy.distanceKm, bearingToStation: brng)
+                    copy.bearingDeg = brng
+                    copy.effectiveDistanceKm = effDist
+                    copy.isAheadOfCourse = isAhead
                     return copy
                 }
                 updated.sort {
+                    if $0.effectiveDistanceKm != $1.effectiveDistanceKm { return $0.effectiveDistanceKm < $1.effectiveDistanceKm }
                     if $0.distanceKm != $1.distanceKm { return $0.distanceKm < $1.distanceKm }
                     return $0.avail > $1.avail
                 }
@@ -639,15 +732,16 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         let urlStr = "https://router.project-osrm.org/table/v1/driving/\(coords)?sources=0&annotations=distance,duration"
         guard let url = URL(string: urlStr) else {
             completion(stations.sorted {
-                if $0.distanceKm != $1.distanceKm { return $0.distanceKm < $1.distanceKm }
-                return $0.avail > $1.avail
+                if $0.effectiveDistanceKm != $1.effectiveDistanceKm { return $0.effectiveDistanceKm < $1.effectiveDistanceKm }
+                return $0.distanceKm < $1.distanceKm
             })
             return
         }
 
         var req = URLRequest(url: url, timeoutInterval: 5)
-        req.setValue("VFSwapRadar/3.0", forHTTPHeaderField: "User-Agent")
-        URLSession.shared.dataTask(with: req) { data, _, _ in
+        req.setValue("VFSwapRadar/3.1", forHTTPHeaderField: "User-Agent")
+        URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
+            guard let self = self else { return }
             var enriched = targets
             if let data = data,
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -661,10 +755,14 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
                         if let durRow = durRow, i + 1 < durRow.count, let secs = durRow[i + 1] as? Double {
                             enriched[i].durationMin = max(1, Int(round(secs / 60.0)))
                         }
+                        let (effDist, isAhead) = self.computeEffectiveDistance(roadKm: km, bearingToStation: enriched[i].bearingDeg)
+                        enriched[i].effectiveDistanceKm = effDist
+                        enriched[i].isAheadOfCourse = isAhead
                     }
                 }
             }
             enriched.sort {
+                if $0.effectiveDistanceKm != $1.effectiveDistanceKm { return $0.effectiveDistanceKm < $1.effectiveDistanceKm }
                 if $0.distanceKm != $1.distanceKm { return $0.distanceKm < $1.distanceKm }
                 return $0.avail > $1.avail
             }
@@ -678,39 +776,68 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
             defer { self.isChecking = false }
 
             self.topStations = Array(qualified.prefix(5))
-            self.statusBadge.text = "🟢 CANH PIN NGẦM 3s (#\(self.cronCount))"
+            self.statusBadge.text = "🟢 CANH PIN & HƯỚNG ĐI 3s (#\(self.cronCount))"
 
             let currentValid = self.lockedStation != nil ? qualified.first(where: { $0.code == self.lockedStation!.code }) : nil
 
             if let oldStation = self.lockedStation, currentValid == nil {
-                // TỦ ĐANG ĐI VỪA TỤT XUỐNG < 2 PIN HOẶC HẾT PIN!
+                // TRƯỜNG HỢP 1: TỦ ĐANG ĐI VỪA HẾT PIN (< minPins)
                 if let nextBest = qualified.first {
                     self.lockedStation = nextBest
-                    let isBg = UIApplication.shared.applicationState != .active
-                    if isBg {
-                        // Đang ở bên màn hình Google Maps -> Đọc giọng nói báo động + Bắn Banner thông báo lên đỉnh Google Maps!
-                        self.pendingAutoOpenGoogleMaps = true
-                        self.sendRerouteNotification(oldName: oldStation.name, newStation: nextBest)
-                        self.speakVietnamese("Cảnh báo! Tủ \(oldStation.name) vừa hết pin! Đã đổi sang tủ \(nextBest.name), còn \(nextBest.avail) pin đầy, cách \(nextBest.distanceKm) ki lô mét. Hãy chạm vào thông báo phía trên màn hình để mở lộ trình mới trên Google Maps!")
-                    } else {
-                        // Đang ở trong App -> Tự động bắn thẳng sang Google Maps!
-                        self.speakVietnamese("Tủ \(oldStation.name) đã hết pin. Tự động mở Google Maps sang tủ \(nextBest.name), còn \(nextBest.avail) pin đầy!")
-                        self.openInGoogleMaps(station: nextBest)
-                    }
+                    self.minDistanceToLockedKm = nextBest.distanceKm
+                    self.triggerRerouteAlert(
+                        reasonTitle: "⚠️ TỦ ĐANG ĐI ĐÃ HẾT PIN! CHẠM ĐỂ ĐỔI HƯỚNG",
+                        voiceMsgBg: "Cảnh báo! Tủ \(oldStation.name) vừa hết pin! Đã đổi sang tủ gần nhất là \(nextBest.name), còn \(nextBest.avail) pin đầy, cách \(nextBest.distanceKm) ki lô mét. Hãy chạm vào thông báo phía trên màn hình để mở lộ trình mới trên Google Maps!",
+                        voiceMsgFg: "Tủ \(oldStation.name) đã hết pin. Tự động mở Google Maps sang tủ gần nhất là \(nextBest.name), còn \(nextBest.avail) pin đầy!",
+                        newStation: nextBest
+                    )
                 } else {
                     self.lockedStation = nil
                     self.speakVietnamese("Cảnh báo! Không còn tủ nào đủ \(self.minPinsRequired) pin đầy quanh đây!")
                 }
+            } else if let validLocked = currentValid {
+                // Tủ đang khóa vẫn còn pin -> Kiểm tra xem người dùng có ĐANG ĐI XA KHỎI TỦ ĐÓ hoặc TIẾN GẦN TỦ KHÁC HƠN KHÔNG
+                self.lockedStation = validLocked
+                if validLocked.distanceKm < self.minDistanceToLockedKm {
+                    self.minDistanceToLockedKm = validLocked.distanceKm
+                }
+
+                let movedAwayKm = validLocked.distanceKm - self.minDistanceToLockedKm
+                let bestCandidate = qualified.first
+
+                if self.autoRerouteByDirection,
+                   let best = bestCandidate,
+                   best.code != validLocked.code {
+                    let isMovingAway = movedAwayKm >= 0.30 && best.distanceKm <= validLocked.distanceKm
+                    let isMuchCloser = (validLocked.distanceKm - best.distanceKm) >= 0.25
+
+                    if isMovingAway || isMuchCloser {
+                        // TRƯỜNG HỢP 2: TỰ ĐỘNG ĐỔI TỦ THEO HƯỚNG DI CHUYỂN / KHI ĐI XA KHỎI TỦ CŨ!
+                        self.lockedStation = best
+                        self.minDistanceToLockedKm = best.distanceKm
+                        let reasonText = isMovingAway
+                            ? "Bạn đã đi xa khỏi tủ cũ \(String(format: "%.0f", movedAwayKm * 1000)) mét."
+                            : "Phát hiện tủ mới gần vị trí bạn hơn."
+                        self.triggerRerouteAlert(
+                            reasonTitle: "🧭 ĐỔI TỦ GẦN HƠN THEO HƯỚNG ĐI! CHẠM ĐỂ RẼ",
+                            voiceMsgBg: "\(reasonText) Đã chuyển mục tiêu sang tủ \(best.name), cách \(best.distanceKm) ki lô mét, còn \(best.avail) pin đầy. Chạm vào thông báo phía trên màn hình để bẻ lái Google Maps!",
+                            voiceMsgFg: "\(reasonText) Tự động chuyển Google Maps sang tủ \(best.name), cách \(best.distanceKm) ki lô mét!",
+                            newStation: best
+                        )
+                        self.refreshUI()
+                        return
+                    }
+                }
+
+                if autoOpenGMapsOnLock {
+                    self.openInGoogleMaps(station: validLocked)
+                }
             } else if self.lockedStation == nil, let first = qualified.first {
                 self.lockedStation = first
-                self.speakVietnamese("Đã khóa tủ \(first.name), sẵn sàng \(first.avail) trên \(first.total) pin đầy, cách \(first.distanceKm) ki lô mét.")
+                self.minDistanceToLockedKm = first.distanceKm
+                self.speakVietnamese("Đã khóa tủ gần nhất \(first.name), sẵn sàng \(first.avail) trên \(first.total) pin đầy, cách \(first.distanceKm) ki lô mét.")
                 if autoOpenGMapsOnLock {
                     self.openInGoogleMaps(station: first)
-                }
-            } else if let valid = currentValid {
-                self.lockedStation = valid
-                if autoOpenGMapsOnLock {
-                    self.openInGoogleMaps(station: valid)
                 }
             }
 
@@ -718,15 +845,30 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         }
     }
 
+    private func triggerRerouteAlert(reasonTitle: String, voiceMsgBg: String, voiceMsgFg: String, newStation: SwapStation) {
+        let isBg = UIApplication.shared.applicationState != .active
+        if isBg {
+            self.pendingAutoOpenGoogleMaps = true
+            let durText = newStation.durationMin != nil ? " (~\(newStation.durationMin!)p)" : ""
+            let body = "Mục tiêu mới: \(newStation.name) [\(newStation.avail)/\(newStation.total) PIN • Cách \(newStation.distanceKm)km\(durText)]. Chạm vào đây để cập nhật Google Maps ngay!"
+            self.sendBannerNotification(title: reasonTitle, body: body, station: newStation)
+            self.speakVietnamese(voiceMsgBg)
+        } else {
+            self.speakVietnamese(voiceMsgFg)
+            self.openInGoogleMaps(station: newStation)
+        }
+    }
+
     // MARK: - 6. CẬP NHẬT GIAO DIỆN & ĐIỀU KHIỂN GOOGLE MAPS
     private func refreshUI() {
         if let st = lockedStation {
             let charging = max(0, st.total - st.avail)
+            let aheadTag = st.isAheadOfCourse ? " • ⬆️ Thuận hướng đang đi" : ""
             targetNameLabel.text = st.name
             targetAddrLabel.text = "\(st.address)\(st.commune.isEmpty ? "" : " • " + st.commune) (Mã: \(st.code))\n🔋 Sẵn sàng rút: \(st.avail) cục (≥95%) • Đang sạc khóa khay: \(charging) cục"
             targetPinBadge.text = "  \(st.avail)/\(st.total) PIN ĐẦY  "
-            let durStr = st.durationMin != nil ? " (~\(st.durationMin!) phút lái xe)" : ""
-            targetDistLabel.text = "🛵 Lộ trình đường bộ: \(st.distanceKm) km\(durStr)"
+            let durStr = st.durationMin != nil ? " (~\(st.durationMin!) phút)" : ""
+            targetDistLabel.text = "🛵 Cách \(st.distanceKm) km\(durStr)\(aheadTag)"
         } else {
             targetNameLabel.text = "Không có tủ nào >= \(minPinsRequired) pin đầy"
             targetAddrLabel.text = "Hãy bấm nút '>= \(minPinsRequired) PIN' ở góc trên để hạ mức lọc pin."
@@ -738,6 +880,7 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         for (idx, st) in topStations.enumerated() {
             let isLocked = lockedStation?.code == st.code
             let charging = max(0, st.total - st.avail)
+            let aheadBadge = st.isAheadOfCourse ? " ⬆️ Thuận hướng" : ""
             let card = UIButton(type: .system)
             card.backgroundColor = isLocked
                 ? UIColor(red: 0.06, green: 0.24, blue: 0.20, alpha: 1.0)
@@ -756,7 +899,7 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
             lbl.translatesAutoresizingMaskIntoConstraints = false
             let durStr = st.durationMin != nil ? " (~\(st.durationMin!)p)" : ""
             let prefix = isLocked ? "🎯 [GẦN NHẤT - ĐANG KHÓA] " : "#\(idx + 1) • "
-            let text = "\(prefix)\(st.distanceKm) km\(durStr)  —  [\(st.avail)/\(st.total) PIN ĐẦY]\n\(st.name)\n\(st.address)\n🔋 Rút ngay: \(st.avail) cục (≥95%) • Đang sạc: \(charging) cục"
+            let text = "\(prefix)\(st.distanceKm) km\(durStr)\(aheadBadge)  —  [\(st.avail)/\(st.total) PIN ĐẦY]\n\(st.name)\n\(st.address)\n🔋 Rút ngay: \(st.avail) cục (≥95%) • Đang sạc: \(charging) cục"
             lbl.text = text
             lbl.font = UIFont.systemFont(ofSize: 13, weight: .semibold)
             lbl.textColor = .white
@@ -780,6 +923,21 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         }
     }
 
+    @objc private func onTapToggleDirection() {
+        autoRerouteByDirection.toggle()
+        if autoRerouteByDirection {
+            btnToggleDirection.setTitle("🧭 Tự động đổi sang tủ gần nhất theo hướng di chuyển: BẬT", for: .normal)
+            btnToggleDirection.backgroundColor = UIColor(red: 0.07, green: 0.25, blue: 0.22, alpha: 1.0)
+            btnToggleDirection.setTitleColor(UIColor(red: 0.43, green: 0.91, blue: 0.72, alpha: 1.0), for: .normal)
+            speakVietnamese("Đã bật tự động đổi sang tủ gần nhất theo hướng di chuyển.")
+        } else {
+            btnToggleDirection.setTitle("🔒 Tự động đổi theo hướng di chuyển: TẮT (Chỉ đổi khi hết pin)", for: .normal)
+            btnToggleDirection.backgroundColor = UIColor(red: 0.16, green: 0.19, blue: 0.26, alpha: 1.0)
+            btnToggleDirection.setTitleColor(UIColor(red: 0.75, green: 0.80, blue: 0.88, alpha: 1.0), for: .normal)
+            speakVietnamese("Đã khóa cố định tủ hiện tại, chỉ tự động đổi khi tủ hết pin.")
+        }
+    }
+
     @objc private func onTapOpenGMaps() {
         if let st = lockedStation {
             openInGoogleMaps(station: st)
@@ -791,6 +949,7 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
     @objc private func onTapRefreshGps() {
         gpsLabel.text = "📍 Đang lấy lại vị trí GPS trực tiếp mới nhất..."
         lockedStation = nil
+        minDistanceToLockedKm = 9999.0
         locationManager.startUpdatingLocation()
         if hasRealGps {
             checkStationsNow(deepScan: true, autoOpenGMapsOnLock: false)
@@ -801,6 +960,7 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         minPinsRequired = minPinsRequired == 2 ? 3 : (minPinsRequired == 3 ? 1 : 2)
         btnFilterPins.setTitle(">= \(minPinsRequired) PIN", for: .normal)
         lockedStation = nil
+        minDistanceToLockedKm = 9999.0
         checkStationsNow(deepScan: true, autoOpenGMapsOnLock: false)
     }
 
@@ -808,13 +968,14 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         if let st = lockedStation {
             blacklistedCodes.insert(st.code)
             lockedStation = nil
+            minDistanceToLockedKm = 9999.0
             checkStationsNow(deepScan: true, autoOpenGMapsOnLock: true)
         }
     }
 
     @objc private func onTapTestBgReroute() {
         guard let st = lockedStation else { return }
-        speakVietnamese("Bắt đầu bài test. Mở Google Maps ngay bây giờ. Sau 6 giây tủ \(st.name) sẽ giả lập hết pin để bạn thử nghiệm thông báo đổi hướng!")
+        speakVietnamese("Bắt đầu bài test. Mở Google Maps ngay bây giờ. Sau 6 giây ứng dụng sẽ giả lập đổi hướng sang tủ mới để bạn thử nghiệm thông báo!")
         openInGoogleMaps(station: st)
         let targetCode = st.code
         DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) { [weak self] in
@@ -829,6 +990,7 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         guard idx >= 0 && idx < topStations.count else { return }
         let chosen = topStations[idx]
         lockedStation = chosen
+        minDistanceToLockedKm = chosen.distanceKm
         refreshUI()
         speakVietnamese("Đã chọn tủ \(chosen.name), còn \(chosen.avail) pin đầy. Đang mở Google Maps.")
         openInGoogleMaps(station: chosen)

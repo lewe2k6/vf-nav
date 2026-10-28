@@ -9,38 +9,33 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - path: VFSwapNavigator
-      - path: www
-        type: folder
     info:
       path: VFSwapNavigator/Info.plist
       properties:
         CFBundleDevelopmentRegion: vi
-        CFBundleDisplayName: "VFSwap 3D"
+        CFBundleDisplayName: "VFSwap Radar"
         CFBundleExecutable: "$(EXECUTABLE_NAME)"
         CFBundleIdentifier: "$(PRODUCT_BUNDLE_IDENTIFIER)"
         CFBundleInfoDictionaryVersion: "6.0"
         CFBundleName: "$(PRODUCT_NAME)"
         CFBundlePackageType: APPL
-        CFBundleShortVersionString: "2.2.0"
-        CFBundleVersion: "4"
+        CFBundleShortVersionString: "3.0.0"
+        CFBundleVersion: "5"
         LSRequiresIPhoneOS: true
         UIRequiresFullScreen: true
         UIViewControllerBasedStatusBarAppearance: true
-        UILaunchScreen:
-          UIColorName: ""
-          UIImageName: ""
+        UILaunchStoryboardName: LaunchScreen
+        UILaunchScreen: {}
+        UIBackgroundModes:
+          - audio
         LSApplicationQueriesSchemes:
           - comgooglemaps
         UIRequiredDeviceCapabilities:
           - arm64
-          - location-services
-          - gps
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
-        NSLocationWhenInUseUsageDescription: "Ứng dụng cần GPS chính xác và La bàn để xoay bản đồ 3D theo hướng xe và tìm tủ đổi pin gần nhất có >= 2 pin đầy."
-        NSLocationAlwaysAndWhenInUseUsageDescription: "Ứng dụng cần vị trí GPS chính xác để tự động kiểm tra tủ pin mỗi 3 giây."
+        NSLocationWhenInUseUsageDescription: "Ứng dụng cần GPS chính xác để tìm tủ đổi pin gần nhất và tự động canh pin mỗi 3 giây khi bạn đang mở Google Maps."
+        NSLocationAlwaysAndWhenInUseUsageDescription: "Ứng dụng cần vị trí GPS để tự động kiểm tra tủ pin mỗi 3 giây."
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
     settings:

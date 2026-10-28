@@ -1,0 +1,31 @@
+name: Build VFSwapNavigator 3D IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build-ipa:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode Project & Build Unsigned IPA
+        run: |
+          xcodegen generate
+          xcodebuild -project VFSwapNavigator.xcodeproj \
+            -scheme VFSwapNavigator \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+          mkdir -p Payload
+          cp -r build/Build/Products/Release-iphoneos/VFSwapNavigator.app Payload/
+          zip -r9 VFSwapNavigator.ipa Payload
+      - name: Upload Unsigned IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VFSwapNavigator-3D-IPA
+          path: VFSwapNavigator.ipa

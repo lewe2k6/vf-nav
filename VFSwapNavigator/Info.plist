@@ -22,6 +22,8 @@
     <string>2</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <key>UILaunchScreen</key>
+    <dict/>
     <key>LSApplicationQueriesSchemes</key>
     <array>
         <string>comgooglemaps</string>

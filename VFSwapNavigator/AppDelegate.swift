@@ -140,13 +140,13 @@ class RadarViewController: UIViewController, CLLocationManagerDelegate, UNUserNo
         data.append(contentsOf: [0x57, 0x41, 0x56, 0x45]) // "WAVE"
         data.append(contentsOf: [0x66, 0x6D, 0x74, 0x20]) // "fmt "
 
-        var fmtChunkSize: UInt32 = 16.littleEndian
-        var audioFormat: UInt16 = 1.littleEndian
-        var numChannels: UInt16 = 1.littleEndian
-        var leSampleRate = sampleRate.littleEndian
+        var fmtChunkSize: UInt32 = UInt32(16).littleEndian
+        var audioFormat: UInt16 = UInt16(1).littleEndian
+        var numChannels: UInt16 = UInt16(1).littleEndian
+        var leSampleRate: UInt32 = sampleRate.littleEndian
         var byteRate: UInt32 = (sampleRate * 2).littleEndian
-        var blockAlign: UInt16 = 2.littleEndian
-        var bitsPerSample: UInt16 = 16.littleEndian
+        var blockAlign: UInt16 = UInt16(2).littleEndian
+        var bitsPerSample: UInt16 = UInt16(16).littleEndian
 
         data.append(Data(bytes: &fmtChunkSize, count: 4))
         data.append(Data(bytes: &audioFormat, count: 2))

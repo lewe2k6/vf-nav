@@ -15,6 +15,7 @@ jobs:
       - name: Generate Xcode Project & Build Unsigned IPA
         run: |
           xcodegen generate
+          sed -i '' 's/objectVersion = 77;/objectVersion = 56;/g' VFSwapNavigator.xcodeproj/project.pbxproj
           xcodebuild -project VFSwapNavigator.xcodeproj \
             -scheme VFSwapNavigator \
             -configuration Release \

@@ -7,23 +7,32 @@
     <key>CFBundleDisplayName</key>
     <string>VFSwap 3D</string>
     <key>CFBundleExecutable</key>
-    <string>VFSwapNavigator</string>
+    <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key>
-    <string>vn.vfswap.navigator3d</string>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>VFSwapNavigator</string>
+    <string>$(PRODUCT_NAME)</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>2.1.0</string>
+    <string>2.2.0</string>
     <key>CFBundleVersion</key>
-    <string>3</string>
+    <string>4</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <key>UIRequiresFullScreen</key>
+    <true/>
+    <key>UIViewControllerBasedStatusBarAppearance</key>
+    <true/>
     <key>UILaunchScreen</key>
-    <dict/>
+    <dict>
+        <key>UIColorName</key>
+        <string></string>
+        <key>UIImageName</key>
+        <string></string>
+    </dict>
     <key>LSApplicationQueriesSchemes</key>
     <array>
         <string>comgooglemaps</string>
@@ -31,6 +40,8 @@
     <key>UIRequiredDeviceCapabilities</key>
     <array>
         <string>arm64</string>
+        <string>location-services</string>
+        <string>gps</string>
     </array>
     <key>UISupportedInterfaceOrientations</key>
     <array>
@@ -39,9 +50,9 @@
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
     <key>NSLocationWhenInUseUsageDescription</key>
-    <string>Ứng dụng cần GPS và La bàn để xoay bản đồ 3D theo hướng lái xe và tìm tủ đổi pin gần nhất có >= 2 pin đầy.</string>
+    <string>Ứng dụng cần GPS chính xác và La bàn để xoay bản đồ 3D theo hướng xe và tìm tủ đổi pin gần nhất có >= 2 pin đầy.</string>
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-    <string>Ứng dụng cần vị trí GPS để tự động kiểm tra tủ pin mỗi 3 giây.</string>
+    <string>Ứng dụng cần vị trí GPS chính xác để tự động kiểm tra tủ pin mỗi 3 giây.</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>

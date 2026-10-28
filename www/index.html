@@ -18,9 +18,9 @@
       --sheet-text: #0f172a;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif; -webkit-tap-highlight-color: transparent; }
-    html, body { width: 100%; height: 100%; overflow: hidden; background: #090d16; user-select: none; }
+    html, body { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100dvh; overflow: hidden; background: #090d16; user-select: none; }
 
-    #map { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; }
+    #map { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100dvh; z-index: 1; }
 
     /* TOP TURN-BY-TURN BANNER (Giống hệt Google Maps Navigation) */
     .top-hud {
@@ -431,6 +431,7 @@
     let stationMarkers = [];
 
     map.on('load', () => {
+      map.resize();
       map.addSource('route-source', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] }
@@ -450,16 +451,37 @@
         paint: { 'line-color': '#00e676', 'line-width': 7, 'line-opacity': 1.0 }
       });
 
-      checkAndNavigate(true);
+      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.requestGps) {
+        document.getElementById('turnStreetText').textContent = 'Đang lấy định vị GPS chính xác từ iPhone...';
+        window.webkit.messageHandlers.requestGps.postMessage('');
+      } else if (hasInitialGps) {
+        checkAndNavigate(true);
+      } else {
+        setTimeout(() => {
+          if (!hasInitialGps && window.location.protocol !== 'vfapp:') {
+            hasInitialGps = true;
+            checkAndNavigate(true);
+          }
+        }, 2000);
+      }
     });
 
-    // Chạm lên bản đồ để test di chuyển vị trí xe (và tự động xoay hướng xe theo hướng di chuyển!)
+    window.addEventListener('resize', () => map.resize());
+
+    // Khi người dùng dùng tay kéo bản đồ để xem xung quanh, tạm ngắt khóa tâm camera cho đến khi bấm "Giữa tâm"
+    map.on('dragstart', () => {
+      followHeading = false;
+    });
+
+    // Chỉ cho phép chạm để giả lập di chuyển xe khi đang test trên máy tính (localhost), TẮT hoàn toàn trên iPhone thật (.ipa) để không bị nhảy lệch vị trí!
     map.on('click', (e) => {
+      if (window.location.protocol === 'vfapp:') return;
       const newLat = e.lngLat.lat;
       const newLng = e.lngLat.lng;
       userHeading = calcBearing(userLat, userLng, newLat, newLng);
       userLat = newLat;
       userLng = newLng;
+      lockedStation = null;
       syncCamera3D();
       checkAndNavigate(true);
     });
@@ -524,6 +546,9 @@
     function recenterCamera3D() {
       followHeading = true;
       is3DPitched = true;
+      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.requestGps) {
+        window.webkit.messageHandlers.requestGps.postMessage('');
+      }
       map.easeTo({
         center: [userLng, userLat],
         zoom: 16.8,
@@ -531,6 +556,8 @@
         bearing: userHeading,
         duration: 500
       });
+      lockedStation = null;
+      checkAndNavigate(true);
     }
 
     function toggleMapLayer() {
@@ -567,6 +594,9 @@
     let isChecking = false;
     let cronCounter = 0;
     let hasInitialGps = false;
+    let lastLockedGpsLat = 0;
+    let lastLockedGpsLng = 0;
+    let bestGpsAccuracy = 9999;
 
     function haversineKm(lat1, lon1, lat2, lon2) {
       const R = 6371, toRad = (d) => (d * Math.PI) / 180;
@@ -581,21 +611,57 @@
       return Number((cappedAvail * 2.5 + ratio * 12.0 - distKm * 20.0).toFixed(2));
     }
 
-    async function fetchDirectVinFastOrLocal(lat, lng, minPins) {
+    async function applyRealRoadDistancesJS(originLat, originLng, stations) {
+      if (!stations.length) return stations;
+      const candidates = stations.slice(0, 15);
+      const coords = [`${originLng},${originLat}`, ...candidates.map((s) => `${s.lng},${s.lat}`)].join(';');
+      const destIdx = candidates.map((_, i) => i + 1).join(';');
+      try {
+        const res = await fetch(`https://router.project-osrm.org/table/v1/driving/${coords}?sources=0&destinations=${destIdx}&annotations=distance`);
+        if (res.ok) {
+          const data = await res.json();
+          const row = data.distances && data.distances[0];
+          if (Array.isArray(row)) {
+            candidates.forEach((st, idx) => {
+              const meters = row[idx];
+              if (typeof meters === 'number' && meters > 0) {
+                st.distanceKm = Number((meters / 1000).toFixed(2));
+              } else {
+                st.distanceKm = Number((st.straightKm * 1.32).toFixed(2));
+              }
+              st.score = calcSmartScore(st.numberBatteryAvailable || 0, st.numberBattery || 1, st.distanceKm);
+            });
+            return candidates.sort((a, b) => b.score - a.score || a.distanceKm - b.distanceKm);
+          }
+        }
+      } catch (e) {}
+      candidates.forEach((st) => {
+        st.distanceKm = Number((st.straightKm * 1.32).toFixed(2));
+        st.score = calcSmartScore(st.numberBatteryAvailable || 0, st.numberBattery || 1, st.distanceKm);
+      });
+      return candidates.sort((a, b) => b.score - a.score || a.distanceKm - b.distanceKm);
+    }
+
+    async function fetchDirectVinFastOrLocal(lat, lng, minPins, deepScan = false) {
       // 1. Khi chạy trong App .ipa Native iOS (vfapp://), gọi thẳng qua VFSchemeHandler (URLSession Native của iOS -> Server VinFast)
       if (window.location.protocol === 'vfapp:') {
-        const res = await fetch(`vfapp://app/api/near?lat=${lat}&lng=${lng}`);
+        const res = await fetch(`vfapp://app/api/near?lat=${lat}&lng=${lng}&deep=${deepScan ? 1 : 0}`);
         const json = await res.json();
         const raw = json.data || [];
-        return raw
+        const preSorted = raw
           .filter((s) => s.status === 'Available' && (s.numberBatteryAvailable || 0) >= minPins)
           .map((s) => {
             const straightKm = haversineKm(lat, lng, s.lat, s.lng);
             const estRoadKm = Number((straightKm * 1.32).toFixed(2));
             const score = calcSmartScore(s.numberBatteryAvailable || 0, s.numberBattery || 1, estRoadKm);
-            return { ...s, distanceKm: estRoadKm, score };
+            return { ...s, straightKm, distanceKm: estRoadKm, score };
           })
-          .sort((a, b) => b.score - a.score || a.distanceKm - b.distanceKm);
+          .sort((a, b) => a.straightKm - b.straightKm);
+
+        if (deepScan) {
+          return await applyRealRoadDistancesJS(lat, lng, preSorted);
+        }
+        return preSorted.sort((a, b) => b.score - a.score || a.distanceKm - b.distanceKm);
       }
 
       // 2. Fallback khi test trên máy tính (localhost:8765)
@@ -604,19 +670,35 @@
       return fallbackData.stations || [];
     }
 
-    // Nhận trực tiếp GPS + Góc La bàn từ CoreLocation Native của iPhone (.ipa)
-    window.onNativeGps = function(lat, lng, heading, speed) {
+    // Nhận trực tiếp GPS + Góc La bàn + Độ chính xác (m) từ CoreLocation Native của iPhone (.ipa)
+    window.onNativeGps = function(lat, lng, heading, speed, accuracy) {
+      const acc = typeof accuracy === 'number' && accuracy > 0 ? accuracy : 50;
       if (speed > 0.5 && heading >= 0) {
         userHeading = heading;
-      } else if (haversineKm(userLat, userLng, lat, lng) > 0.008) {
+      } else if (hasInitialGps && haversineKm(userLat, userLng, lat, lng) > 0.008) {
         userHeading = calcBearing(userLat, userLng, lat, lng);
       }
       userLat = lat;
       userLng = lng;
       syncCamera3D();
+
+      const movedFromLockedKm = lastLockedGpsLat ? haversineKm(lastLockedGpsLat, lastLockedGpsLng, lat, lng) : 999;
       if (!hasInitialGps) {
         hasInitialGps = true;
+        lastLockedGpsLat = lat;
+        lastLockedGpsLng = lng;
+        bestGpsAccuracy = acc;
+        lockedStation = null;
         checkAndNavigate(true);
+      } else if (movedFromLockedKm > 0.12 && acc < bestGpsAccuracy * 0.8) {
+        // Nếu GPS lúc đầu lấy theo trạm phát sóng bị lệch (>120m) và vừa chốt được vệ tinh chính xác hơn, tự động khóa lại tủ gần nhất!
+        lastLockedGpsLat = lat;
+        lastLockedGpsLng = lng;
+        bestGpsAccuracy = acc;
+        lockedStation = null;
+        checkAndNavigate(true);
+      } else if (acc < bestGpsAccuracy) {
+        bestGpsAccuracy = acc;
       }
     };
 
@@ -627,8 +709,8 @@
       }
     };
 
-    // Lắng nghe GPS liên tục từ iPhone
-    if (navigator.geolocation) {
+    // Lắng nghe GPS dự phòng từ trình duyệt (chỉ dùng khi không chạy trong .ipa Native)
+    if (navigator.geolocation && window.location.protocol !== 'vfapp:') {
       navigator.geolocation.watchPosition(
         (pos) => {
           const newLat = pos.coords.latitude;
@@ -643,15 +725,11 @@
           syncCamera3D();
           if (!hasInitialGps) {
             hasInitialGps = true;
+            lockedStation = null;
             checkAndNavigate(true);
           }
         },
-        () => {
-          if (!hasInitialGps) {
-            hasInitialGps = true;
-            checkAndNavigate(true);
-          }
-        },
+        () => {},
         { enableHighAccuracy: true, maximumAge: 1000, timeout: 5000 }
       );
     }
@@ -813,6 +891,12 @@
     // 3. CRON 3 GIÂY KIỂM TRA TRỰC TIẾP & TỰ ĐỘNG BẺ LÁI KHI TỦ < 2 PIN
     // =========================================================================
     async function checkAndNavigate(forceRecalcRoute = false) {
+      if (window.location.protocol === 'vfapp:' && !hasInitialGps) {
+        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.requestGps) {
+          window.webkit.messageHandlers.requestGps.postMessage('');
+        }
+        return;
+      }
       if (isChecking) return;
       isChecking = true;
       cronCounter++;
@@ -822,7 +906,8 @@
       setTimeout(() => dot.classList.remove('ping'), 350);
 
       try {
-        const allAvailable = await fetchDirectVinFastOrLocal(userLat, userLng, minPinsRequired);
+        const needDeepScan = forceRecalcRoute || !lockedStation;
+        const allAvailable = await fetchDirectVinFastOrLocal(userLat, userLng, minPinsRequired, needDeepScan);
         const qualified = allAvailable.filter(
           (s) =>
             !blacklistedCodes.has(s.code) &&

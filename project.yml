@@ -1,6 +1,7 @@
 name: VFSwapNavigator
 options:
   bundleIdPrefix: vn.vfswap
+  xcodeVersion: "15.0"
 targets:
   VFSwapNavigator:
     type: application
@@ -12,3 +13,41 @@ targets:
         type: folder
     info:
       path: VFSwapNavigator/Info.plist
+      properties:
+        CFBundleDevelopmentRegion: vi
+        CFBundleDisplayName: "VFSwap 3D"
+        CFBundleExecutable: "$(EXECUTABLE_NAME)"
+        CFBundleIdentifier: "$(PRODUCT_BUNDLE_IDENTIFIER)"
+        CFBundleInfoDictionaryVersion: "6.0"
+        CFBundleName: "$(PRODUCT_NAME)"
+        CFBundlePackageType: APPL
+        CFBundleShortVersionString: "2.2.0"
+        CFBundleVersion: "4"
+        LSRequiresIPhoneOS: true
+        UIRequiresFullScreen: true
+        UIViewControllerBasedStatusBarAppearance: true
+        UILaunchScreen:
+          UIColorName: ""
+          UIImageName: ""
+        LSApplicationQueriesSchemes:
+          - comgooglemaps
+        UIRequiredDeviceCapabilities:
+          - arm64
+          - location-services
+          - gps
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSLocationWhenInUseUsageDescription: "Ứng dụng cần GPS chính xác và La bàn để xoay bản đồ 3D theo hướng xe và tìm tủ đổi pin gần nhất có >= 2 pin đầy."
+        NSLocationAlwaysAndWhenInUseUsageDescription: "Ứng dụng cần vị trí GPS chính xác để tự động kiểm tra tủ pin mỗi 3 giây."
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: vn.vfswap.navigator3d
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: VFSwapNavigator/Info.plist
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        ENABLE_BITCODE: NO

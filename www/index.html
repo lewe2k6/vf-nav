@@ -582,33 +582,50 @@
     }
 
     async function fetchDirectVinFastOrLocal(lat, lng, minPins) {
-      // 1. Thử gọi trực tiếp từ iPhone (.ipa WKWebView / Native) tới thẳng server VinFast (0 tốn 1 request nào qua Worker!)
-      try {
-        const directRes = await fetch(`${VF_API_URL}?lat=${lat}&lng=${lng}&distance=5000`, {
-          method: 'GET',
-          headers: VF_HEADERS
-        });
-        if (directRes.ok) {
-          const json = await directRes.json();
-          const raw = json.data || [];
-          return raw
-            .filter((s) => s.status === 'Available' && (s.numberBatteryAvailable || 0) >= minPins)
-            .map((s) => {
-              const straightKm = haversineKm(lat, lng, s.lat, s.lng);
-              const estRoadKm = Number((straightKm * 1.32).toFixed(2));
-              const score = calcSmartScore(s.numberBatteryAvailable || 0, s.numberBattery || 1, estRoadKm);
-              return { ...s, distanceKm: estRoadKm, score };
-            })
-            .sort((a, b) => b.score - a.score || a.distanceKm - b.distanceKm);
-        }
-      } catch (e) {
-        // Nếu đang mở trên trình duyệt PC bị chặn CORS thì fallback về local server 8765
+      // 1. Khi chạy trong App .ipa Native iOS (vfapp://), gọi thẳng qua VFSchemeHandler (URLSession Native của iOS -> Server VinFast)
+      if (window.location.protocol === 'vfapp:') {
+        const res = await fetch(`vfapp://app/api/near?lat=${lat}&lng=${lng}`);
+        const json = await res.json();
+        const raw = json.data || [];
+        return raw
+          .filter((s) => s.status === 'Available' && (s.numberBatteryAvailable || 0) >= minPins)
+          .map((s) => {
+            const straightKm = haversineKm(lat, lng, s.lat, s.lng);
+            const estRoadKm = Number((straightKm * 1.32).toFixed(2));
+            const score = calcSmartScore(s.numberBatteryAvailable || 0, s.numberBattery || 1, estRoadKm);
+            return { ...s, distanceKm: estRoadKm, score };
+          })
+          .sort((a, b) => b.score - a.score || a.distanceKm - b.distanceKm);
       }
 
+      // 2. Fallback khi test trên máy tính (localhost:8765)
       const fallbackRes = await fetch(`/api/fast-check?lat=${lat}&lng=${lng}&minPins=${minPins}`);
       const fallbackData = await fallbackRes.json();
       return fallbackData.stations || [];
     }
+
+    // Nhận trực tiếp GPS + Góc La bàn từ CoreLocation Native của iPhone (.ipa)
+    window.onNativeGps = function(lat, lng, heading, speed) {
+      if (speed > 0.5 && heading >= 0) {
+        userHeading = heading;
+      } else if (haversineKm(userLat, userLng, lat, lng) > 0.008) {
+        userHeading = calcBearing(userLat, userLng, lat, lng);
+      }
+      userLat = lat;
+      userLng = lng;
+      syncCamera3D();
+      if (!hasInitialGps) {
+        hasInitialGps = true;
+        checkAndNavigate(true);
+      }
+    };
+
+    window.onNativeHeading = function(heading) {
+      if (followHeading && Math.abs(heading - userHeading) > 2.0) {
+        userHeading = heading;
+        map.rotateTo(userHeading, { duration: 120 });
+      }
+    };
 
     // Lắng nghe GPS liên tục từ iPhone
     if (navigator.geolocation) {
@@ -652,6 +669,11 @@
         osc.start();
         osc.stop(ctx.currentTime + (urgent ? 0.38 : 0.15));
       } catch (e) {}
+
+      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nativeSpeak) {
+        window.webkit.messageHandlers.nativeSpeak.postMessage(text);
+        return;
+      }
 
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();

@@ -14,7 +14,9 @@ jobs:
         run: brew install xcodegen
       - name: Generate Xcode Project & Build Unsigned IPA
         run: |
+          cp VFSwapNavigator/Info.plist /tmp/Info.plist.bak
           xcodegen generate
+          cp /tmp/Info.plist.bak VFSwapNavigator/Info.plist
           sed -i '' 's/objectVersion = 77;/objectVersion = 56;/g' VFSwapNavigator.xcodeproj/project.pbxproj
           xcodebuild -project VFSwapNavigator.xcodeproj \
             -scheme VFSwapNavigator \
